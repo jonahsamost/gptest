@@ -1,0 +1,13 @@
+mlp:
+  hidden_dim: 768
+  expand_size: 4
+attn:
+  num_heads: 6
+  num_kv_heads: 6
+  hidden_dim: ${mlp.hidden_dim}
+gpt:
+  layers: 12
+  rope_dtype: bf16
+  seq_len: 2048
+tokenizer:
+  vocab_size: 32768
