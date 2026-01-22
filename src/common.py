@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn.functional as F
 
@@ -43,4 +44,14 @@ def precompute_rotary_embeddings(config, seq_len, head_dim, base=100_000):
 
 # https://arxiv.org/pdf/1910.07467
 def rms_norm(x):
+    # parameter free rms_norm
     return F.rms_norm(x, (x.size(-1),))
+
+
+def get_base_dir():
+    gptest_base = os.environ.get('GPTEST_BASE_DIR')
+    if not gptest_base:
+        home_dir = os.path.expanduser('~')
+        gptest_base = os.path.join(home_dir, 'gptest')
+    os.markdirs(gptest_base, exist_ok=True)
+    return gptest_base
