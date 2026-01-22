@@ -1,7 +1,7 @@
 """
 BPE tokenizer
 """
-
+import json
 import os
 import copy
 from functools import lru_cache
@@ -126,4 +126,28 @@ class HuggingFaceTokenizer:
         os.makedirs(tokenizer_dir, exist_ok=True)
         tokenizer_path = os.path.join(tokenizer_dir, 'tokenizer.json')
         self.tokenizer.save(tokenizer_path)
+
+        with open(tokenizer_path, 'r') as f:
+            data = json.load(f)
+        data['model']['merges'] = [' '.join(m) for m in data['model']['merges']]
+        with open(tokenizer_path, 'w') as f:
+            json.dump(data, f)
+
         print(f'Saved tokenzer to {tokenizer_path}')
+
+
+def get_tokenizer():
+    from src.utils import get_base_dir
+    base_dir = get_base_dir()
+    tokenizer_dir = os.path.join(base_dir, 'tokenizer')
+    return HuggingFaceTokenizer.from_directory(tokenizer_dir)
+
+
+def get_token_bytes(device='cpu'):
+    import torch
+    from src.utils import get_base_dir
+    token_bytes_path = os.path.join(get_base_dir(), 'tokenizer/token_bytes.pt')
+    assert os.path.exists(token_bytes_path), f'Token bytes file not found'
+    with open(token_bytes_path, 'rb') as f:
+        token_bytes = torch.load(f, map_location=device)
+    return token_bytes
