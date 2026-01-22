@@ -6,7 +6,7 @@ import requests
 import pyarrow.parquet as pq
 from multiprocessing import Pool
 
-from src.common import get_base_dir
+from src.utils import get_base_dir
 
 BASE_URL = "https://huggingface.co/datasets/karpathy/fineweb-edu-100b-shuffle/resolve/main"
 MAX_SHARD = 1822 # the last datashard is shard_01822.parquet
