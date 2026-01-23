@@ -9,5 +9,17 @@ gpt:
   layers: 12
   rope_dtype: bf16
   seq_len: 2048
+  unembedding_lr: .004
+  embedding_lr: .3
+  matrix_lr: .02
 tokenizer:
   vocab_size: 32768
+meta:
+  train_dtype: bf16
+  use_wandb: False
+  device_batch_size: 32
+  weight_decay: .2
+  resume_from_step: False
+  adam_beta1: .8
+  adam_beta2: .95
+  grad_accum_steps: 1

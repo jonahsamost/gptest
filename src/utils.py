@@ -1,3 +1,4 @@
+import argparse
 import torch
 import logging
 import torch.distributed as dist
@@ -24,13 +25,33 @@ class DDP:
     is_ddp: bool = False
     rank: int = 0
     local_rank: int = 0
-    world_size: int = 0
+    world_size: int = 1
 
 
 def get_config():
     return OmegaConf.load("config.yaml")
 
 
+def get_config_cli(log=False):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', default='config.yaml')
+    parser.add_argument('overrides', nargs='*')  # e.g. model.hidden_dim=1024
+    args = parser.parse_args()
+    
+    cfg = OmegaConf.load(args.config)
+    # Apply CLI overrides
+    if args.overrides:
+        cli_cfg = OmegaConf.from_dotlist(args.overrides)
+        cfg = OmegaConf.merge(cfg, cli_cfg)
+    if log:
+        log_config(cfg)
+    return cfg
+
+
+def log_config(cfg):
+    ddp_rank = int(os.environ.get('RANK', 0))
+    if ddp_rank == 0:
+        print(OmegaConf.to_yaml(cfg, resolve=True))
 
 
 def get_base_dir():
@@ -87,7 +108,7 @@ def compute_init(device_type='cuda'): # cuda | cpu | mps
     if ddp.rank == 0:
         logger.info(f'Distributed world size: {ddp.world_size}')
     
-    return ddp. device
+    return ddp, device
 
 
 def is_ddp_initialized():
@@ -103,6 +124,11 @@ def print0(s='', **kwargs):
     ddp_rank = int(os.environ.get('RANK', 0))
     if ddp_rank == 0:
         print(s, **kwargs)
+
+
+def log0(message):
+    if int(os.environ.get('RANK', 0)) == 0:
+        logger.info(message)
 
 
 class DummyWandb:

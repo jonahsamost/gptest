@@ -1,12 +1,16 @@
+from pickletools import optimize
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from functools import partial
+from scripts.base_train import muon_optimizer
 from src.ffn import BaseMLP
 from src.attention import CausalSelfAttention
 from src.common import (
     rms_norm, precompute_rotary_embeddings
 )
+from src.utils import get_dist_info, log0
 
 
 class TransformerBlock(nn.Module):
@@ -114,3 +118,31 @@ class GPT(nn.Module):
         )
         self.cos, self.sin = cos, sin
 
+    def setup_optimizers(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
+        model_dim = self.config.mlp.hidden_dim
+        ddp = get_dist_info()
+        matrix_params = list(self.transformer.h.parameters())
+        embedding_params = list(self.transformer.wte.parameters())
+        lm_head_params = list(self.lm_head.parameters())
+        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params)
+
+        dmodel_lr_scale = (model_dim / 768) ** -0.5
+        log0(f'Scaling the LR for AdamW parameters => 1 / sqrt({model_dim} / 768) => {dmodel_lr_scale:.6f}')
+        adam_groups = [
+            dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale),
+            dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale)
+        ]
+        # hardcode weight decay at 0 for adam, only use wd for muon
+        adamw_kwargs = dict(betas=adam_betas, eps=1e-10, weight_decay=0.0)
+        AdamWFactory = DistAdamW if ddp.is_ddp else partial(torch.optim.AdamW, fused=True)
+        adamw_optimizer = AdamWFactory(adam_groups, **adamw_kwargs)
+
+        muon_kwargs = dict(lr=matrix_lr, momentum=0.95, weight_decay=weight_decay)
+        MuonFactory = DistMuon if ddp.is_ddp else Muon
+        muon_optimizer = MuonFactory(matrix_params, **muon_kwargs)
+
+        optimizers = [adamw_optimizer, muon_optimizer]
+        for opt in optimizers:
+            for group in opt.param_groups:
+                group['initial_lr'] = group['lr']
+        return optimizers
