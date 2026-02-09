@@ -17,9 +17,13 @@ tokenizer:
 meta:
   train_dtype: bf16
   use_wandb: False
+  total_batch_size: 524288
   device_batch_size: 32
   weight_decay: .2
-  resume_from_step: False
+  resume_from_step: -1
   adam_beta1: .8
   adam_beta2: .95
   grad_accum_steps: 1
+  warmup_ratio: 0.0
+  warmdown_ratio: 0.4
+  final_lr_frac: 0.0

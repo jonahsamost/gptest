@@ -11,6 +11,8 @@ from src.common import (
     rms_norm, precompute_rotary_embeddings
 )
 from src.utils import get_dist_info, log0
+from src.adamw import DistAdamW
+from src.muon import Muon, DistMuon
 
 
 class TransformerBlock(nn.Module):

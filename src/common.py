@@ -46,3 +46,21 @@ def precompute_rotary_embeddings(config, seq_len, head_dim, base=100_000):
 def rms_norm(x):
     # parameter free rms_norm
     return F.rms_norm(x, (x.size(-1),))
+
+
+def get_lr_multipler(config, it, num_iters):
+    warmup_iters = round(config.meta.warmup_ratio * num_iters)
+    warmdown_iters = round(config.meta.warmdown_ratio * num_iters)
+    if it < warmup_iters:
+        return (it + 1) / warmup_iters
+    elif it <= num_iters - warmdown_iters:
+        return 1.0
+    else:
+        progress = (num_iters - it) / warmdown_iters
+        return progress * 1.0 + (1 - progress) * config.meta.final_lr_frac
+    
+
+def get_muon_momentum(it):
+    frac = min(it / 300, 1)
+    mom = (1 - frac) * 0.85 + frac * .95
+    return mom

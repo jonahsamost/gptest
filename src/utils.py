@@ -1,8 +1,10 @@
 import argparse
+import urllib
 import torch
 import logging
 import torch.distributed as dist
 import os
+from filelock import FileLock
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from dataclasses import dataclass
@@ -151,3 +153,27 @@ def autodetect_device_type():
     return device_type
 
 
+
+def download_file_with_lock(url, filename, postprocess_fn=None):
+    base_dir = get_base_dir()
+    file_path = os.path.join(base_dir, filename)
+    lock_path = file_path + '.lock'
+
+    if os.path.exists(file_path):
+        return file_path
+    
+    with FileLock(lock_path):
+        if os.path.exists(file_path):
+            return file_path
+        
+        print(f"Downling from {url}")
+        with urllib.request.urlopen(url) as response:
+            content = response.read()
+        
+        with open(file_path, 'wb') as f:
+            f.write(content)
+        
+        if postprocess_fn is not None:
+            postprocess_fn(file_path)
+    
+    return file_path
