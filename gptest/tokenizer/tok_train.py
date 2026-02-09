@@ -2,9 +2,9 @@ import os
 import time
 import argparse
 import torch
-from src.tokenizer import HuggingFaceTokenizer
-from src.utils import get_base_dir
-from src.dataset import parquets_iter_batched
+from gptest.tokenizer.tokenizer import HuggingFaceTokenizer
+from gptest.utils.utils import get_base_dir
+from gptest.data.dataset import parquets_iter_batched
 
 
 test_text = """Hello world! This is a test.

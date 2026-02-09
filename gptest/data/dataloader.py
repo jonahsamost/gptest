@@ -1,8 +1,8 @@
 import torch
 import pyarrow.parquet as pq
 
-from src.utils import get_dist_info
-from src.dataset import list_parquet_files
+from gptest.utils.ddp_utils import get_dist_info
+from gptest.data.dataset import list_parquet_files
 from dataclasses import dataclass, replace
 
 @dataclass
