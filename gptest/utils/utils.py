@@ -5,6 +5,14 @@ import os
 from filelock import FileLock
 import hydra
 from omegaconf import DictConfig, OmegaConf
+import torch
+
+DTYPE_MAP = {
+    'fp32': torch.float32,
+    'fp16': torch.float16,
+    'bf16': torch.bfloat16,
+    'fp8': torch.float8_e4m3fn,
+}
 
 
 def get_config():
@@ -13,12 +21,7 @@ def get_config():
     return OmegaConf.load(path)
 
 
-def get_config_cli(log=False):
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default='config.yaml')
-    parser.add_argument('overrides', nargs='*')  # e.g. model.hidden_dim=1024
-    args = parser.parse_args()
-    
+def get_config_cli(args, log=True):
     cfg = OmegaConf.load(args.config)
     # Apply CLI overrides
     if args.overrides:

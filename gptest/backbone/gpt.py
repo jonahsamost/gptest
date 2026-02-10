@@ -2,17 +2,15 @@ from pickletools import optimize
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim import AdamW, Muon
+import math
+from omegaconf import DictConfig, OmegaConf
 
 from functools import partial
-from scripts.base_train import muon_optimizer
-from src.ffn import BaseMLP
-from src.attention import CausalSelfAttention
-from src.common import (
-    rms_norm, precompute_rotary_embeddings
-)
-from src.utils import get_dist_info, log0
-from src.adamw import DistAdamW
-from src.muon import Muon, DistMuon
+from gptest.backbone.ffn import BaseMLP
+from gptest.backbone.attention import CausalSelfAttention
+from gptest.backbone.common import ( rms_norm, precompute_rotary_embeddings)
+from gptest.utils.ddp_utils import get_dist_info, log0, DDP
 
 
 class TransformerBlock(nn.Module):
@@ -51,7 +49,6 @@ class GPT(nn.Module):
         cos, sin = precompute_rotary_embeddings(
             config, self.rotary_seq_len, head_dim
         )
-        self.cos, self.sin = cos, sin
         # not in model.parameters(), not updated by optimizer,
         # dont recieve gradients, not in state_dict() (persistent=False)
         # get moved with .to()
@@ -101,7 +98,7 @@ class GPT(nn.Module):
         """
 
         torch.nn.init.normal_(self.transformer.wte.weight, mean=0.0, std=1.0)
-        torch.nn.init.normal_(self.transformer.lm_head.weight, mean=0.0, std=0.001)
+        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
 
         # uniform init with sqrt(3) * std == same std as normal
         hidden_size = self.config.mlp.hidden_dim
@@ -120,9 +117,21 @@ class GPT(nn.Module):
         )
         self.cos, self.sin = cos, sin
 
-    def setup_optimizers(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
+    def setup_optimizers(self, config: DictConfig, ddp: DDP):
+        
+        batch_lr_scale = math.sqrt(
+            config.meta.device_batch_size * ddp.world_size * config.meta.grad_accum_steps    
+        )
+        adam_betas = (config.meta.adam_beta1, config.meta.adam_beta2)
+        unembedding_lr=config.gpt.unembedding_lr * batch_lr_scale
+        embedding_lr=config.gpt.embedding_lr * batch_lr_scale
+        matrix_lr=config.gpt.matrix_lr * batch_lr_scale
+        weight_decay=config.meta.weight_decay
+        adam_betas=adam_betas
+        # scalar_lr=config.gpt.scalar_lr * batch_lr_scale
+
         model_dim = self.config.mlp.hidden_dim
-        ddp = get_dist_info()
+        # ddp = get_dist_info()
         matrix_params = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params = list(self.lm_head.parameters())
@@ -135,13 +144,13 @@ class GPT(nn.Module):
             dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale)
         ]
         # hardcode weight decay at 0 for adam, only use wd for muon
-        adamw_kwargs = dict(betas=adam_betas, eps=1e-10, weight_decay=0.0)
-        AdamWFactory = DistAdamW if ddp.is_ddp else partial(torch.optim.AdamW, fused=True)
-        adamw_optimizer = AdamWFactory(adam_groups, **adamw_kwargs)
+        adamw_kwargs = dict(
+            betas=adam_betas, eps=1e-10, weight_decay=0.0, fused=True
+        )
+        adamw_optimizer = AdamW(adam_groups, **adamw_kwargs)
 
         muon_kwargs = dict(lr=matrix_lr, momentum=0.95, weight_decay=weight_decay)
-        MuonFactory = DistMuon if ddp.is_ddp else Muon
-        muon_optimizer = MuonFactory(matrix_params, **muon_kwargs)
+        muon_optimizer = Muon(matrix_params, **muon_kwargs)
 
         optimizers = [adamw_optimizer, muon_optimizer]
         for opt in optimizers:

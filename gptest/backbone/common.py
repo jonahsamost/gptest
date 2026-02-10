@@ -2,13 +2,7 @@ import os
 import torch
 import torch.nn.functional as F
 
-DTYPE_MAP = {
-    'fp32': torch.float32,
-    'fp16': torch.float16,
-    'bf16': torch.bfloat16,
-    'fp8': torch.float8_e4m3fn,
-}
-
+from gptest.utils.utils import DTYPE_MAP
 
 # https://arxiv.org/pdf/2104.09864
 def apply_rotary_emb(x, cos, sin):

@@ -137,7 +137,7 @@ class HuggingFaceTokenizer:
 
 
 def get_tokenizer():
-    from src.utils import get_base_dir
+    from gptest.utils.utils import get_base_dir
     base_dir = get_base_dir()
     tokenizer_dir = os.path.join(base_dir, 'tokenizer')
     return HuggingFaceTokenizer.from_directory(tokenizer_dir)
@@ -145,7 +145,7 @@ def get_tokenizer():
 
 def get_token_bytes(device='cpu'):
     import torch
-    from src.utils import get_base_dir
+    from gptest.utils.utils import get_base_dir
     token_bytes_path = os.path.join(get_base_dir(), 'tokenizer/token_bytes.pt')
     assert os.path.exists(token_bytes_path), f'Token bytes file not found'
     with open(token_bytes_path, 'rb') as f:

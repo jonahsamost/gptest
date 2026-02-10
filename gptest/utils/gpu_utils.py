@@ -36,8 +36,8 @@ def compute_init(device_type='cuda'): # cuda | cpu | mps
 def autodetect_device_type():
     if torch.cuda.is_available():
         device_type = 'cuda'
-    elif torch.backends.mps.is_available():
-        device_type = 'mps'
+    # elif torch.backends.mps.is_available():
+    #     device_type = 'mps'
     else:
         device_type = 'cpu'
     print0(f'Autodetected device type: {device_type}')

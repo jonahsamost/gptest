@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.common import (
+from gptest.backbone.common import (
     apply_rotary_emb, rms_norm
 )
-from src.sdpa import attention_func
+from gptest.backbone.sdpa import attention_func
 
 
 class CausalSelfAttention(nn.Module):
