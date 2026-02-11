@@ -117,7 +117,7 @@ class HuggingFaceTokenizer:
             raise ValueError(f'Invalid input type: {type(text)}')
     
     def __call__(self, *args, **kwargs):
-        return self.encode(**args, **kwargs)
+        return self.encode(*args, **kwargs)
     
     def decode(self, ids):
         return self.tokenizer.decode(ids, skip_special_tokens=False)

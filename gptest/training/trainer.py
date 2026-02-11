@@ -18,6 +18,7 @@ from gptest.data.dataloader import (
 )
 from gptest.evals.bpb_loss_eval import evaluate_bpb
 from gptest.evals.base_eval import evaluate_model
+from gptest.training.loss import cross_entropy
 
 
 class Trainer:
@@ -96,10 +97,8 @@ class Trainer:
             return
         self.model.eval()
         val_loader = self.build_val_loader()
-        eval_tokens = 20 * 524288
-        eval_steps = eval_tokens // (
-            self.config.meta.device_batch_size * self.config.gpt.seq_len * self.ddp.world_size
-        )
+        eval_steps = 20
+        log0(f"Eval bpb for {eval_steps} steps")
         with self.autocast_ctx:
             val_bpb = evaluate_bpb(self.model, val_loader, eval_steps, self.token_bytes)
         log0(f"Step: {self.iteration:05d} | Validation bpb: {val_bpb:.6f}")
@@ -118,6 +117,7 @@ class Trainer:
         if not (good_iter or is_end):
             return
         self.model.eval()
+        log0("Eval core!")
         with self.autocast_ctx:
             results = evaluate_model(
                 self.uncompiled_model, self.tokenizer, self.device,
@@ -125,7 +125,7 @@ class Trainer:
             )
         cm = results['core_metric']
         log0(f"Step: {self.iteration:05d} | Validation bpb: {cm:.4f}")
-        wandb_run.log({
+        self.wandb_run.log({
             "step": self.iteration,
             "core_metric": results["core_metric"],
             "centered_results": results["centered_results"],
@@ -141,6 +141,7 @@ class Trainer:
         if not (good_iter or is_end):
             return
         self.model.eval()
+        log0("Sampling model!")
         prompts = [
             "The capital of France is",
             "The chemical symbol of gold is",
@@ -158,15 +159,8 @@ class Trainer:
                 for token in stream:
                     gen_tokens.append(token)
                 response = self.tokenizer.decode(gen_tokens)
-                print(f'Prompt: {prompt} | Response: {response}')
+                log0(f'Prompt: {prompt}\nResponse: {response}\n\n')
         self.model.train()
-    
-    def compute_loss(self, logits, targets, loss_reduction='mean'):
-        loss = F.cross_entropy(
-            logits.view(-1, logits.size(-1)), targets.view(-1),
-            ignore_index=-1, reduction=loss_reduction
-        )
-        return loss
     
     def step(self):
         self.synchronize()
@@ -174,7 +168,7 @@ class Trainer:
         for micro_step in range(self.grad_accum_steps):
             with self.autocast_ctx:
                 logits = self.model(self.x)
-                loss = self.compute_loss(logits, self.y)
+                loss = cross_entropy(logits, self.y)
             train_loss = loss.detach()
             loss /= self.grad_accum_steps
             loss.backward()

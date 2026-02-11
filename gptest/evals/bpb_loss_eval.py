@@ -5,6 +5,8 @@ import math
 import torch
 import torch.distributed as dist
 
+from gptest.training.loss import cross_entropy
+
 @torch.no_grad()
 def evaluate_bpb(model, batches, steps, token_bytes):
     """
@@ -30,7 +32,8 @@ def evaluate_bpb(model, batches, steps, token_bytes):
     batch_iter = iter(batches)
     for _ in range(steps):
         x, y = next(batch_iter)
-        loss2d = model(x, y, loss_reduction='none') # (B, T)
+        logits = model(x)
+        loss2d = cross_entropy(logits, y, loss_reduction='none')
         loss2d = loss2d.view(-1) # flatten
         y = y.view(-1) # flatten
         if (y.int() < 0).any(): # mps does not currently have kernel for < 0 for int64, only int32

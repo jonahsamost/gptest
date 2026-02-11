@@ -79,7 +79,7 @@ class GPT(nn.Module):
     def get_device(self):
         return self.transformer.wte.weight.device
 
-    def generate(self, tokens, max_tokens, temperature=1.0, top_k=None, seed=42):
+    def generate(self, tokens, max_tokens=64, temperature=1.0, top_k=None, seed=42):
         assert isinstance(tokens, list)
         device = self.get_device()
         rng = None
@@ -99,7 +99,7 @@ class GPT(nn.Module):
                 next_ids = torch.multinomial(probs, num_samples=1, generator=rng)
             else:
                 next_ids = torch.argmax(logits, dim=-1, keepdim=True)
-            ids = torch.cat((ids, next), dim=1)
+            ids = torch.cat((ids, next_ids), dim=1)
             token = next_ids.item()
             yield token
     

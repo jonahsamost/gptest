@@ -68,7 +68,7 @@ def download_file_with_lock(url, filename, postprocess_fn=None):
         if os.path.exists(file_path):
             return file_path
         
-        print(f"Downling from {url}")
+        print(f"Downloading from {url}")
         with urllib.request.urlopen(url) as response:
             content = response.read()
         

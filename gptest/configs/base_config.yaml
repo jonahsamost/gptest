@@ -28,7 +28,7 @@ meta:
   warmdown_ratio: 0.4
   final_lr_frac: 0.0
   max_steps: 1000
-  sample_every: 100
-  eval_every: 100
-  core_metric_every: 100
-  core_metric_max_per_task: 500
+  sample_every: 10
+  eval_every: 10
+  core_metric_every: 10
+  core_metric_max_per_task: 10
