@@ -10,6 +10,7 @@ import random
 import numpy as np
 import torch
 import torch.distributed as dist
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import Tensor
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerFast
@@ -18,7 +19,7 @@ from wandb.sdk import wandb_run
 
 from gptest.tokenizer.tokenizer import ( get_tokenizer, get_token_bytes )
 from gptest.utils.utils import ( DTYPE_MAP, get_base_dir)
-from gptest.utils.ddp_utils import (log0, print0, DDP)
+from gptest.utils.ddp_utils import (log0, print0, DDP, compute_cleanup)
 from gptest.backbone.gpt import GPT
 from gptest.data.dataloader import (
     tokenizing_dist_data_loader_with_state_bos,
@@ -26,6 +27,7 @@ from gptest.data.dataloader import (
 )
 from gptest.evals.bpb_loss_eval import evaluate_bpb
 from gptest.evals.base_eval import evaluate_model
+from scripts.base_train import autocast_ctx, debiased_smooth_loss
 
 
 class Trainer:
@@ -43,6 +45,10 @@ class Trainer:
         self.iteration = 0
         self.config = config
         self.wandb_run = wandb_run
+        self.grad_accum_steps = self.config.meta.grad_accum_steps
+        self.smooth_train_loss = 0.0
+        self.num_iterations = self.config.meta.max_steps
+        self.total_training_time = 0.0
 
         self.autocast_ctx = torch.amp.autocast(
             device_type=self.device_type, dtype=DTYPE_MAP[config.meta.train_dtype]
@@ -71,6 +77,10 @@ class Trainer:
         self.optimizers = self.model.setup_optimizers(
             config, self.ddp
         )
+        self.lr_schedulers = []
+        for opt in self.optimizers:
+            scheduler = CosineAnnealingLR(opt, T_max=config.meta.max_steps, eta_min=0.0)
+            self.lr_schedulers.append(scheduler)
 
         log0(f"Creating dataloaders")
         self.train_loader = tokenizing_dist_data_loader_with_state_bos(
@@ -90,7 +100,7 @@ class Trainer:
         if not ee or not self.iteration:
             return
         good_iter = self.iteration % ee == 0
-        is_end = self.iteration == self.config.meta.max_steps - 1
+        is_end = self.iteration == self.num_iterations - 1
         if not (good_iter or is_end):
             return
         self.model.eval()
@@ -113,7 +123,7 @@ class Trainer:
         if not cme or not self.iteration:
             return
         good_iter = self.iteration % cme == 0
-        is_end = self.iteration == self.config.meta.max_steps - 1
+        is_end = self.iteration == self.num_iterations - 1
         if not (good_iter or is_end):
             return
         self.model.eval()
@@ -131,16 +141,104 @@ class Trainer:
         })
         self.model.train()
     
-    def train(self):
+    def sample_model(self):
+        se = self.config.meta.sample_every
+        if not se or not self.iteration or self.ddp.rank != 0:
+            return
+        good_iter = self.iteration % se == 0
+        is_end = self.iteration == self.num_iterations - 1
+        if not (good_iter or is_end):
+            return
+        self.model.eval()
+        prompts = [
+            "The capital of France is",
+            "The chemical symbol of gold is",
+            "If yesterday was Friday, then tomorrow will be",
+            "The opposite of hot is",
+            "The planets of the solar system are:",
+            "My favorite color is",
+            "If 5*x + 3 = 13, then x is",
+        ]
+        for prompt in prompts:
+            gen_tokens = []
+            tokens = self.tokenizer(prompt, prepend='<|bos|>')
+            stream = self.model.generate(tokens)
+            with self.autocast_ctx:
+                for token in stream:
+                    gen_tokens.append(token)
+                response = self.tokenizer.decode(gen_tokens)
+                print(f'Prompt: {prompt} | Response: {response}')
+        self.model.train()
+    
+    def step(self):
+        self.synchronize()
+        t0 = time.time()
+        for micro_step in range(self.grad_accum_steps):
+            with autocast_ctx:
+                loss = self.model(self.x, self.y)
+            train_loss = loss.detach()
+            loss /= self.grad_accum_steps
+            loss.backward()
+            self.x, self.y, _ = next(self.train_loader)
+
+        for scheduler in self.lr_schedulers:
+            scheduler.step()
         
-        while self.iteration < self.config.meta.max_steps:
+        self.model.zero_grad(set_to_none=True)
+        train_loss_f = train_loss.item()
+        self.synchronize()
+        t1 = time.time()
+        dt = t1 - t0
+        return train_loss_f, dt
+    
+    def log(self, train_loss_f, dt):
+        ema_beta = .9
+        self.smooth_train_loss = ema_beta * self.smooth_train_loss + (1 - ema_beta) * train_loss_f
+        debiased_smooth_loss = self.smooth_train_loss / (1 - ema_beta**(self.iteration + 1))
+        pct_done = 100 * self.iteration / self.num_iterations
+        tok_per_sec = int(self.config.meta.total_batch_size / dt)
+        # TODO log flops_per_sec, mfu
+
+        steps_done = self.iteration - 10
+        eta_str = f''
+        if steps_done > 0:
+            self.total_training_time += dt
+            avg_time_per_step = self.total_training_time / steps_done
+            remain = self.num_iterations - self.iteration
+            eta_seconds = remain * avg_time_per_step
+            eta_str = f' | eta: {eta_seconds/60:.1f}m'
+        
+        log0(
+            f"step: {self.iteration:05d} / {self.num_iterations:05d} ({pct_done:.2f}%) | "
+            f"loss: {debiased_smooth_loss:.6f} | dt: {dt * 1000:.2f}ms | tok/sec: {tok_per_sec:,} | "
+            f"total time: {self.total_training_time/60:.2f}m{eta_str}"
+        )
+
+        is_end = self.iteration == self.num_iterations - 1
+        is_good = self.iteration and self.iteration % self.meta.wandb_log_steps == 0
+        if is_good or is_end:
+            self.wandb_run.log({
+                "step": self.iteration,
+                # "total_training_flops": flops_so_far,
+                "total_training_time": self.total_training_time,
+                "train/loss": debiased_smooth_loss,
+                # "train/lrm": lrm,
+                "train/dt": dt,
+                "train/tok_per_sec": tok_per_sec,
+                # "train/mfu": mfu,
+                # "train/epoch": epoch,
+            })
+    
+    def finish(self):
+        self.wandb_run.finish()
+        compute_cleanup()
+    
+    def train(self):
+        while self.iteration < self.num_iterations:
             self.eval_bpb()
             self.eval_core()
-            
+            self.sample_model()
+            loss, dt = self.step()
+            self.log(loss, dt)
             self.iteration += 1
-    
-    def generate(self):
-        ...
-
-
         

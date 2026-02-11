@@ -33,9 +33,6 @@ if __name__ == '__main__':
     wandb_run = DummyWandb()
     trainer = Trainer(config, ddp=ddp, device=device, wandb_run=wandb_run)
     trainer.train()
+    trainer.finish()
 
-    if wandb_run:
-        wandb_run.finish()
-    
-    compute_cleanup()
 

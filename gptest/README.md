@@ -2,9 +2,9 @@
 
 TODOs
 - checkpointing
-- flops appx (for determing steps)
+- flops appx
 - optimizers (build own, dont use torch's)
-- batch lr scaling
+- custom learning rate
 
 
 First, tokenize:

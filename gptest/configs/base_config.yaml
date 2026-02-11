@@ -17,6 +17,7 @@ tokenizer:
 meta:
   train_dtype: bf16
   use_wandb: False
+  wandb_log_steps: 100
   total_batch_size: 524288
   device_batch_size: 32
   resume_from_step: -1
@@ -28,6 +29,7 @@ meta:
   warmdown_ratio: 0.4
   final_lr_frac: 0.0
   max_steps: 1000
+  sample_every: 100
   eval_every: 100
   core_metric_every: 100
   core_metric_max_per_task: 500
