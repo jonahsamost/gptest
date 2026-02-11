@@ -8,7 +8,7 @@ attn:
 gpt:
   layers: 12
   rope_dtype: bf16
-  seq_len: 2048
+  seq_len: 1024
   unembedding_lr: .004
   embedding_lr: .3
   matrix_lr: .02
@@ -18,7 +18,6 @@ meta:
   train_dtype: bf16
   use_wandb: False
   wandb_log_steps: 100
-  total_batch_size: 524288
   device_batch_size: 32
   resume_from_step: -1
   adam_beta1: .8

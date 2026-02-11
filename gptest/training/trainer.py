@@ -1,25 +1,16 @@
-import math
-import os
 import time
-from pathlib import Path
 from typing import Any
 from contextlib import nullcontext
 
-from omegaconf import DictConfig, OmegaConf
-import random
-import numpy as np
+from omegaconf import DictConfig
 import torch
-import torch.distributed as dist
+import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch import Tensor
-from tqdm.auto import tqdm
-from transformers import PreTrainedTokenizerFast
-import wandb
 from wandb.sdk import wandb_run
 
 from gptest.tokenizer.tokenizer import ( get_tokenizer, get_token_bytes )
 from gptest.utils.utils import ( DTYPE_MAP, get_base_dir)
-from gptest.utils.ddp_utils import (log0, print0, DDP, compute_cleanup)
+from gptest.utils.ddp_utils import (log0, DDP, compute_cleanup)
 from gptest.backbone.gpt import GPT
 from gptest.data.dataloader import (
     tokenizing_dist_data_loader_with_state_bos,
@@ -27,7 +18,6 @@ from gptest.data.dataloader import (
 )
 from gptest.evals.bpb_loss_eval import evaluate_bpb
 from gptest.evals.base_eval import evaluate_model
-from scripts.base_train import autocast_ctx, debiased_smooth_loss
 
 
 class Trainer:
@@ -49,6 +39,7 @@ class Trainer:
         self.smooth_train_loss = 0.0
         self.num_iterations = self.config.meta.max_steps
         self.total_training_time = 0.0
+        self.total_batch_size = ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len
 
         self.autocast_ctx = torch.amp.autocast(
             device_type=self.device_type, dtype=DTYPE_MAP[config.meta.train_dtype]
@@ -92,7 +83,7 @@ class Trainer:
             self.tokenizer, config.meta.device_batch_size, config.gpt.seq_len,
             split='val', device=self.device
         )
-        x, y, _ = next(self.train_loader)
+        self.x, self.y, _ = next(self.train_loader)
         log0("Trainer inited")
     
     def eval_bpb(self):
@@ -130,7 +121,7 @@ class Trainer:
         with self.autocast_ctx:
             results = evaluate_model(
                 self.uncompiled_model, self.tokenizer, self.device,
-                max_per_task=self.meta.core_metric_max_per_task
+                max_per_task=self.config.meta.core_metric_max_per_task
             )
         cm = results['core_metric']
         log0(f"Step: {self.iteration:05d} | Validation bpb: {cm:.4f}")
@@ -170,16 +161,27 @@ class Trainer:
                 print(f'Prompt: {prompt} | Response: {response}')
         self.model.train()
     
+    def compute_loss(self, logits, targets, loss_reduction='mean'):
+        loss = F.cross_entropy(
+            logits.view(-1, logits.size(-1)), targets.view(-1),
+            ignore_index=-1, reduction=loss_reduction
+        )
+        return loss
+    
     def step(self):
         self.synchronize()
         t0 = time.time()
         for micro_step in range(self.grad_accum_steps):
-            with autocast_ctx:
-                loss = self.model(self.x, self.y)
+            with self.autocast_ctx:
+                logits = self.model(self.x)
+                loss = self.compute_loss(logits, self.y)
             train_loss = loss.detach()
             loss /= self.grad_accum_steps
             loss.backward()
             self.x, self.y, _ = next(self.train_loader)
+
+        for opt in self.optimizers:
+            opt.step()
 
         for scheduler in self.lr_schedulers:
             scheduler.step()
@@ -196,7 +198,7 @@ class Trainer:
         self.smooth_train_loss = ema_beta * self.smooth_train_loss + (1 - ema_beta) * train_loss_f
         debiased_smooth_loss = self.smooth_train_loss / (1 - ema_beta**(self.iteration + 1))
         pct_done = 100 * self.iteration / self.num_iterations
-        tok_per_sec = int(self.config.meta.total_batch_size / dt)
+        tok_per_sec = int(self.total_batch_size / dt)
         # TODO log flops_per_sec, mfu
 
         steps_done = self.iteration - 10
@@ -215,7 +217,7 @@ class Trainer:
         )
 
         is_end = self.iteration == self.num_iterations - 1
-        is_good = self.iteration and self.iteration % self.meta.wandb_log_steps == 0
+        is_good = self.iteration and self.iteration % self.config.meta.wandb_log_steps == 0
         if is_good or is_end:
             self.wandb_run.log({
                 "step": self.iteration,
