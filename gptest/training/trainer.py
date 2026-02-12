@@ -9,7 +9,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from wandb.sdk import wandb_run
 
 from gptest.tokenizer.tokenizer import ( get_tokenizer, get_token_bytes )
-from gptest.utils.utils import ( DTYPE_MAP, get_base_dir, get_step_count)
+from gptest.utils.utils import ( DTYPE_MAP, get_base_dir, get_peak_flops, get_step_count)
 from gptest.utils.ddp_utils import (log0, DDP, compute_cleanup)
 from gptest.backbone.gpt import GPT
 from gptest.data.dataloader import (
@@ -62,7 +62,10 @@ class Trainer:
         model.init_weights() 
         self.uncompiled_model = model
         self.model = torch.compile(model, dynamic=False)
+
         self.num_iterations = get_step_count(model, config, ddp)
+        self.flops_per_token = self.model.estimate_flops()
+        self.gpu_peak_flops = get_peak_flops()
 
         num_params = self.model.params_count()
         log0(f'Number of model parameters: {num_params}')
@@ -210,18 +213,23 @@ class Trainer:
             f"total time: {self.total_training_time/60:.2f}m{eta_str}"
         )
 
+        flops_per_step = self.flops_per_token * self.total_batch_size
+        flops_so_far = flops_per_step * self.iteration 
+        flops_per_sec = flops_per_step / dt
+        mfu = 100 * flops_per_sec / (self.gpu_peak_flops * self.ddp.world_size)
+
         is_end = self.iteration == self.num_iterations - 1
         is_good = self.iteration and self.iteration % self.config.meta.wandb_log_steps == 0
         if is_good or is_end:
             self.wandb_run.log({
                 "step": self.iteration,
-                # "total_training_flops": flops_so_far,
+                "total_training_flops": flops_so_far,
                 "total_training_time": self.total_training_time,
                 "train/loss": debiased_smooth_loss,
                 # "train/lrm": lrm,
                 "train/dt": dt,
                 "train/tok_per_sec": tok_per_sec,
-                # "train/mfu": mfu,
+                "train/mfu": mfu,
                 # "train/epoch": epoch,
             })
     
