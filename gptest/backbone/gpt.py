@@ -184,3 +184,28 @@ class GPT(nn.Module):
             for group in opt.param_groups:
                 group['initial_lr'] = group['lr']
         return optimizers
+    
+    def params_count(self):
+        return sum(p.numel() for p in self.parameters())
+    
+    def estimtate_flops(self):
+        """
+        See this blog: https://medium.com/@dzmitrybahdanau/the-flops-calculus-of-language-model-training-3b19c1f025e4
+
+        Each matmul weight contributes 2 FLOPS (mutliply, accumulate) in fwd, and 2x in bwd
+            => 2 + 4 == 6
+        Attn => 12 * h * q * effective_seq_len
+        """
+        nparams = self.params_count()
+        ignored_params = (
+            self.transformer.wte.weight.numel()
+        )
+        params = nparams - ignored_params
+        h = self.config.attn.num_heads,
+        q = self.config.mlp.hidden_dim // h
+        t = self.config.gpt.seq_len
+
+        matmul_flops = 6 * nparams
+        attn_flops = 12 * h * q * t
+        total_flops = matmul_flops + attn_flops
+        return total_flops

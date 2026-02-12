@@ -8,7 +8,9 @@ import wandb
 import argparse
 
 from gptest.training.trainer import Trainer
-from gptest.utils.utils import get_config_cli, get_config, DummyWandb
+from gptest.utils.utils import (
+    get_config_cli, get_config, DummyWandb, check_config
+)
 from gptest.utils.gpu_utils import ( compute_init, autodetect_device_type )
 from gptest.utils.ddp_utils import compute_cleanup
 
@@ -19,6 +21,7 @@ if __name__ == '__main__':
     parser.add_argument('overrides', nargs='*')  # e.g. model.hidden_dim=1024
     args = parser.parse_args()
     config = get_config_cli(args)
+    check_config(config)
 
     device_type = autodetect_device_type()
     ddp, device = compute_init(device_type)

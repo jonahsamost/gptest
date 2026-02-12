@@ -7,6 +7,8 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
 
+from gptest.utils.ddp_utils import DDP, log0
+
 DTYPE_MAP = {
     'fp32': torch.float32,
     'fp16': torch.float16,
@@ -30,6 +32,11 @@ def get_config_cli(args, log=True):
     if log:
         log_config(cfg)
     return cfg
+
+
+def check_config(config):
+    choices = ['flops', 'params', 'none']
+    assert config.meta.chinchilla in choices, f"Step count not in {choices}"
 
 
 def log_config(cfg):
@@ -79,3 +86,30 @@ def download_file_with_lock(url, filename, postprocess_fn=None):
             postprocess_fn(file_path)
     
     return file_path
+
+
+def get_step_count(model: torch.nn.Module, config: DictConfig, ddp: DDP):
+    """
+    From: https://arxiv.org/abs/2203.15556 (Chinchilla)
+    Blog: https://medium.com/@dzmitrybahdanau/the-flops-calculus-of-language-model-training-3b19c1f025e4
+    """
+    choice = config.meta.chinchilla
+    total_batch_size = ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len
+    if choice == 'none':
+        steps = config.meta.max_steps
+        log0(f"Steps -- using user provided steps: {steps}")
+        return steps
+    if choice == 'params':
+        total_tokens = model.params_count() * config.meta.data_param_ratio
+        steps = total_tokens // total_batch_size
+        log0(f"Steps -- using empircal Chinchilla rule based on parameters: {steps}")
+        return steps
+    if choice == 'flops':
+        assert config.meta.total_flops > 0
+        flops = model.estimate_flops()
+        denom = flops * total_batch_size
+        steps = round(config.meta.target_flops / denom)
+        log0(f"Steps -- using Chinchilla scaling based on flops: {steps}")
+        return steps
+
+

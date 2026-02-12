@@ -9,7 +9,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from wandb.sdk import wandb_run
 
 from gptest.tokenizer.tokenizer import ( get_tokenizer, get_token_bytes )
-from gptest.utils.utils import ( DTYPE_MAP, get_base_dir)
+from gptest.utils.utils import ( DTYPE_MAP, get_base_dir, get_step_count)
 from gptest.utils.ddp_utils import (log0, DDP, compute_cleanup)
 from gptest.backbone.gpt import GPT
 from gptest.data.dataloader import (
@@ -38,7 +38,6 @@ class Trainer:
         self.wandb_run = wandb_run
         self.grad_accum_steps = self.config.meta.grad_accum_steps
         self.smooth_train_loss = 0.0
-        self.num_iterations = self.config.meta.max_steps
         self.total_training_time = 0.0
         self.total_batch_size = ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len
 
@@ -63,9 +62,10 @@ class Trainer:
         model.init_weights() 
         self.uncompiled_model = model
         self.model = torch.compile(model, dynamic=False)
+        self.num_iterations = get_step_count(model, config, ddp)
 
-        num_params = sum(p.numel() for p in self.model.parameters())
-        log0(f'Number of parameters: {num_params}')
+        num_params = self.model.params_count()
+        log0(f'Number of model parameters: {num_params}')
         self.optimizers = self.model.setup_optimizers(
             config, self.ddp
         )
