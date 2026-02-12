@@ -19,11 +19,12 @@ meta:
   train_dtype: bf16
   device_batch_size: 32
   resume_from_step: -1
-  # optimization / LR
+  # optimizer
   adam_beta1: .8
   adam_beta2: .95
   weight_decay: .2
   grad_accum_steps: 1
+  # learning scheduler
   warmup_ratio: 0.0
   warmdown_ratio: 0.4
   final_lr_frac: 0.0

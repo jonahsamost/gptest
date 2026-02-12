@@ -5,11 +5,10 @@ from contextlib import nullcontext
 from omegaconf import DictConfig
 import torch
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from wandb.sdk import wandb_run
 
 from gptest.tokenizer.tokenizer import ( get_tokenizer, get_token_bytes )
 from gptest.utils.utils import ( DTYPE_MAP, get_base_dir, get_peak_flops, get_step_count)
+from gptest.training.utils import get_lr_multiplier
 from gptest.utils.ddp_utils import (log0, DDP, compute_cleanup)
 from gptest.backbone.gpt import GPT
 from gptest.data.dataloader import (
@@ -72,10 +71,6 @@ class Trainer:
         self.optimizers = self.model.setup_optimizers(
             config, self.ddp
         )
-        self.lr_schedulers = []
-        for opt in self.optimizers:
-            scheduler = CosineAnnealingLR(opt, T_max=config.meta.max_steps, eta_min=0.0)
-            self.lr_schedulers.append(scheduler)
 
         log0(f"Creating dataloaders")
         self.train_loader = tokenizing_dist_data_loader_with_state_bos(
@@ -87,7 +82,7 @@ class Trainer:
             self.tokenizer, config.meta.device_batch_size, config.gpt.seq_len,
             split='val', device=self.device
         )
-        self.x, self.y, _ = next(self.train_loader)
+        self.x, self.y, self.pqd = next(self.train_loader)
         log0("Trainer inited")
     
     def eval_bpb(self):
@@ -175,14 +170,16 @@ class Trainer:
             train_loss = loss.detach()
             loss /= self.grad_accum_steps
             loss.backward()
-            self.x, self.y, _ = next(self.train_loader)
+            self.x, self.y, self.pqd = next(self.train_loader)
+        
+        lrm = get_lr_multiplier(self.config, self.iteration, self.num_iterations)
+        for opt in self.optimizers:
+            for group in opt.param_groups:
+                group['lr'] = group['initial_lr'] * lrm
 
         for opt in self.optimizers:
             opt.step()
 
-        for scheduler in self.lr_schedulers:
-            scheduler.step()
-        
         self.model.zero_grad(set_to_none=True)
         train_loss_f = train_loss.item()
         self.synchronize()
@@ -196,7 +193,6 @@ class Trainer:
         debiased_smooth_loss = self.smooth_train_loss / (1 - ema_beta**(self.iteration + 1))
         pct_done = 100 * self.iteration / self.num_iterations
         tok_per_sec = int(self.total_batch_size / dt)
-        # TODO log flops_per_sec, mfu
 
         steps_done = self.iteration - 10
         eta_str = f''
@@ -230,7 +226,7 @@ class Trainer:
                 "train/dt": dt,
                 "train/tok_per_sec": tok_per_sec,
                 "train/mfu": mfu,
-                # "train/epoch": epoch,
+                "train/epoch": self.pqd.epoch,
             })
     
     def finish(self):
