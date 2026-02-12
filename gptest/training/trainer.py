@@ -38,7 +38,10 @@ class Trainer:
         self.grad_accum_steps = self.config.meta.grad_accum_steps
         self.smooth_train_loss = 0.0
         self.total_training_time = 0.0
-        self.total_batch_size = ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len
+        self.total_batch_size = (
+            ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len * config.meta.grad_accum_steps
+        )
+        self.lrm = 0.0
 
         self.autocast_ctx = torch.amp.autocast(
             device_type=self.device_type, dtype=DTYPE_MAP[config.meta.train_dtype]
@@ -172,10 +175,10 @@ class Trainer:
             loss.backward()
             self.x, self.y, self.pqd = next(self.train_loader)
         
-        lrm = get_lr_multiplier(self.config, self.iteration, self.num_iterations)
+        self.lrm = get_lr_multiplier(self.config, self.iteration, self.num_iterations)
         for opt in self.optimizers:
             for group in opt.param_groups:
-                group['lr'] = group['initial_lr'] * lrm
+                group['lr'] = group['initial_lr'] * self.lrm
 
         for opt in self.optimizers:
             opt.step()
@@ -222,7 +225,7 @@ class Trainer:
                 "total_training_flops": flops_so_far,
                 "total_training_time": self.total_training_time,
                 "train/loss": debiased_smooth_loss,
-                # "train/lrm": lrm,
+                "train/lrm": self.lrm,
                 "train/dt": dt,
                 "train/tok_per_sec": tok_per_sec,
                 "train/mfu": mfu,

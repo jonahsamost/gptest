@@ -94,7 +94,9 @@ def get_step_count(model: torch.nn.Module, config: DictConfig, ddp: DDP):
     Blog: https://medium.com/@dzmitrybahdanau/the-flops-calculus-of-language-model-training-3b19c1f025e4
     """
     choice = config.meta.chinchilla
-    total_batch_size = ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len
+    total_batch_size = (
+        ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len * config.meta.grad_accum_steps
+    )
     if choice == 'none':
         steps = config.meta.max_steps
         log0(f"Steps -- using user provided steps: {steps}")

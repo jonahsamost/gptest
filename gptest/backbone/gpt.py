@@ -145,44 +145,67 @@ class GPT(nn.Module):
         self.cos, self.sin = cos, sin
 
     def setup_optimizers(self, config: DictConfig, ddp: DDP):
-        
-        batch_lr_scale = math.sqrt(
-            config.meta.device_batch_size * ddp.world_size * config.meta.grad_accum_steps    
-        )
+        tokens_per_fwdbwd = config.meta.device_batch_size * config.gpt.seq_len
+        world_tokens_per_fwdbwd = tokens_per_fwdbwd * ddp.world_size
+        total_batch_size = world_tokens_per_fwdbwd * config.meta.grad_accum_steps
+
+        reference_batch_size = 2 ** 19  # same as nanochat
+        batch_ratio = total_batch_size / reference_batch_size
+        if batch_ratio != 1.0:
+            # AdamW / Muon == sqrt scaling
+            batch_lr_scale = batch_ratio ** 0.5
+            log0(f"Scaling LRs by {batch_lr_scale:.4f} for batch size {total_batch_size:,} "
+                f"(reference: {reference_batch_size:,})")
+        else:
+            batch_lr_scale = 1.0
+
+        depth = config.gpt.layers
+        reference_depth = 12
+        weight_decay_scaled = config.meta.weight_decay * (reference_depth / depth) ** 2
+        if depth != reference_depth:
+            log0(f"Scaling weight decay from {config.meta.weight_decay:.6f} "
+                f"to {weight_decay_scaled:.6f} for depth {depth}")
+
         adam_betas = (config.meta.adam_beta1, config.meta.adam_beta2)
-        unembedding_lr=config.gpt.unembedding_lr * batch_lr_scale
-        embedding_lr=config.gpt.embedding_lr * batch_lr_scale
-        matrix_lr=config.gpt.matrix_lr * batch_lr_scale
-        weight_decay=config.meta.weight_decay
-        adam_betas=adam_betas
-        # scalar_lr=config.gpt.scalar_lr * batch_lr_scale
+        unembedding_lr = config.gpt.unembedding_lr * batch_lr_scale
+        embedding_lr   = config.gpt.embedding_lr * batch_lr_scale
+        matrix_lr      = config.gpt.matrix_lr * batch_lr_scale
 
         model_dim = self.config.mlp.hidden_dim
-        # ddp = get_dist_info()
-        matrix_params = list(self.transformer.h.parameters())
-        embedding_params = list(self.transformer.wte.parameters())
-        lm_head_params = list(self.lm_head.parameters())
-        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params)
-
         dmodel_lr_scale = (model_dim / 768) ** -0.5
-        log0(f'Scaling the LR for AdamW parameters => 1 / sqrt({model_dim} / 768) => {dmodel_lr_scale:.6f}')
+        log0(f"Scaling the LR for AdamW parameters ⇒ 1 / sqrt({model_dim} / 768) "
+            f"=> {dmodel_lr_scale:.6f}")
+
+        matrix_params   = list(self.transformer.h.parameters())
+        embedding_params = list(self.transformer.wte.parameters())
+        lm_head_params   = list(self.lm_head.parameters())
+        assert len(list(self.parameters())) == (
+            len(matrix_params) + len(embedding_params) + len(lm_head_params)
+        )
+
         adam_groups = [
-            dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale),
-            dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale)
+            dict(params=lm_head_params,   lr=unembedding_lr * dmodel_lr_scale),
+            dict(params=embedding_params, lr=embedding_lr   * dmodel_lr_scale),
         ]
-        # hardcode weight decay at 0 for adam, only use wd for muon
         adamw_kwargs = dict(
-            betas=adam_betas, eps=1e-10, weight_decay=0.0, fused=True
+            betas=adam_betas,
+            eps=1e-10,
+            weight_decay=0.0,
+            fused=True,
         )
         adamw_optimizer = AdamW(adam_groups, **adamw_kwargs)
 
-        muon_kwargs = dict(lr=matrix_lr, momentum=0.95, weight_decay=weight_decay)
+        muon_kwargs = dict(
+            lr=matrix_lr,
+            momentum=0.95,
+            weight_decay=weight_decay_scaled,
+        )
         muon_optimizer = Muon(matrix_params, **muon_kwargs)
 
         optimizers = [adamw_optimizer, muon_optimizer]
         for opt in optimizers:
             for group in opt.param_groups:
-                group['initial_lr'] = group['lr']
+                group["initial_lr"] = group["lr"]
         return optimizers
     
     def params_count(self):
