@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from gptest.backbone.common import (
     apply_rotary_emb, rms_norm
 )
-from gptest.backbone.sdpa import attention_func
+from gptest.backbone.sdpa import attention_func, attention_with_kv
 
 
 class CausalSelfAttention(nn.Module):
@@ -32,7 +32,7 @@ class CausalSelfAttention(nn.Module):
         self.c_v = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
         self.c_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False)
     
-    def forward(self, x, cos_sin):
+    def forward(self, x, cos_sin, kv_cache=None):
         B, T, HD = x.size()
 
         # shape: (B, T, H, D)
@@ -43,8 +43,20 @@ class CausalSelfAttention(nn.Module):
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = rms_norm(q), rms_norm(k)
-
-        y = attention_func(q, k, v, causal=True)
+        
+        if kv_cache is None:
+            y = attention_func(q, k, v, causal=True)
+        else:
+            k_cache, v_cache = kv_cache.get_layer_cache(self.layer_idx)
+            y = attention_with_kv(
+                q, k_cache, v_cache,
+                k=k, v=v,
+                cache_seqlens=kv_cache.cache_seqlens,
+                causal=True
+            )
+            # only advance cache is last layer
+            if self.layer_idx == kv_cache.n_layers - 1:
+                kv_cache.advance(T)
         y = y.contiguous().view(B, T, -1)
         y = self.c_proj(y)
         return y

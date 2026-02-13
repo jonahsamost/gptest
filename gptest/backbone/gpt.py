@@ -19,9 +19,9 @@ class TransformerBlock(nn.Module):
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = BaseMLP(config)
     
-    def forward(self, x, cos_sin):
+    def forward(self, x, cos_sin, kv_cache=None):
         # TODO pre-norm vs post-norm ?
-        x = x + self.attn(rms_norm(x), cos_sin)
+        x = x + self.attn(rms_norm(x), cos_sin, kv_cache=kv_cache)
         x = x + self.mlp(rms_norm(x))
         return x
 
@@ -68,7 +68,7 @@ class GPT(nn.Module):
 
         x = self.transformer.wte(inputs) # (B, T, H)
         for i, block in enumerate(self.transformer.h):
-            x = block(x, cos_sin)
+            x = block(x, cos_sin, kv_cache=kv_cache)
         x = rms_norm(x)
 
         logits = self.lm_head(x) # shape: (B, T, VS)

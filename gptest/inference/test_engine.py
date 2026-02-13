@@ -27,7 +27,7 @@ if __name__ == '__main__':
     with autocast_ctx:
         for token in stream:
             generated_tokens.append(token)
-            chunk = tokenizer.deocde([token])
+            chunk = tokenizer.decode([token])
             print(chunk, end='', flush=True)
     print()
     torch.cuda.synchronize()
