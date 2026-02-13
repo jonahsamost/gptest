@@ -9,12 +9,14 @@ gpt:
   layers: 12
   rope_dtype: bf16
   seq_len: 1024
+  unembedding_lr: .004
+  embedding_lr: .3
 tokenizer:
   vocab_size: 32768
 meta:
   # core
   train_dtype: bf16
-  device_batch_size: 32
+  device_batch_size: 16
   resume_from_step: -1
   # optimizer
   adam_beta1: .9
@@ -22,9 +24,7 @@ meta:
   weight_decay: .1
   grad_accum_steps: 1
   muon_lr: 9.503e-4
-  adamw_lr: ${meta.muon_lr}
-  unembedding_lr: .004
-  embedding_lr: .3
+  adamw_lr: 9.503e-4
   # learning scheduler
   warmup_ratio: 0.0
   warmdown_ratio: 0.4
@@ -34,6 +34,7 @@ meta:
   eval_every: 10
   core_metric_every: 10
   core_metric_max_per_task: 10
+  checkpoint_every: 10
   # step count determination
   max_steps: 1000
   data_param_ratio: 21.0  # empirical from chinchilla

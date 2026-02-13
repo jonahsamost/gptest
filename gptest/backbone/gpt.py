@@ -169,7 +169,7 @@ class GPT(nn.Module):
         adam_betas = (config.meta.adam_beta1, config.meta.adam_beta2)
         unembedding_lr = config.gpt.unembedding_lr * batch_lr_scale
         embedding_lr   = config.gpt.embedding_lr * batch_lr_scale
-        matrix_lr      = config.gpt.matrix_lr * batch_lr_scale
+        matrix_lr      = config.meta.muon_lr * batch_lr_scale
 
         model_dim = self.config.mlp.hidden_dim
         dmodel_lr_scale = (model_dim / 768) ** -0.5
@@ -211,7 +211,7 @@ class GPT(nn.Module):
     def params_count(self):
         return sum(p.numel() for p in self.parameters())
     
-    def estimtate_flops(self):
+    def estimate_flops(self):
         """
         See this blog: https://medium.com/@dzmitrybahdanau/the-flops-calculus-of-language-model-training-3b19c1f025e4
 
@@ -224,7 +224,7 @@ class GPT(nn.Module):
             self.transformer.wte.weight.numel()
         )
         params = nparams - ignored_params
-        h = self.config.attn.num_heads,
+        h = self.config.attn.num_heads
         q = self.config.mlp.hidden_dim // h
         t = self.config.gpt.seq_len
 

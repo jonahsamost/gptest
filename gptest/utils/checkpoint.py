@@ -11,10 +11,23 @@ from gptest.tokenizer.tokenizer import get_tokenizer
 from gptest.utils.ddp_utils import log0
 from gptest.utils.utils import get_base_dir
 
+BASE = 'base'
+MID = 'mid'
+SFT = 'sft'
+RL = 'rl'
+
+
 class Checkpoint:
-    def __init__(self, checkpoint_dir, rank):
-        self.checkpoint_dir = checkpoint_dir
+    def __init__(self, source, rank):
         self.rank = rank
+        model_dir = {
+            BASE: "base_checkpoints",
+            MID: "mid_checkpoints",
+            SFT: "chatsft_checkpoints",
+            RL: "chatrl_checkpoints",
+        }[source]
+        base_dir = get_base_dir()
+        self.checkpoint_dir = os.path.join(base_dir, model_dir)
     
     def save(self, step, model_data, optimizer_data, meta_data):
         if self.rank == 0:
@@ -99,12 +112,6 @@ class Checkpoint:
         return model, tokenizer, meta_data
     
     def load_source_model(self, source, *args, **kwargs):
-        model_dir = {
-            "base": "base_checkpoints",
-            "mid": "mid_checkpoints",
-            "sft": "chatsft_checkpoints",
-            "rl": "chatrl_checkpoints",
-        }[source]
         base_dir = get_base_dir()
-        checkpoints_dir = os.path.join(base_dir, model_dir)
+        checkpoints_dir = os.path.join(base_dir, self.checkpoint_dir)
         return self.load_model_from_dir(checkpoints_dir, *args, **kwargs)

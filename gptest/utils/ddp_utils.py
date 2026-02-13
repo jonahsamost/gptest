@@ -19,6 +19,11 @@ def is_ddp_requested():
     return all(k in os.environ for k in ['RANK', 'LOCAL_RANK', 'WORLD_SIZE'])
 
 
+def synchronize():
+    if is_ddp_initialized():
+        dist.barrier()
+
+
 def get_dist_info():
     if is_ddp_requested():
         return DDP(

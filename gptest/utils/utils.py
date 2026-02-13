@@ -63,7 +63,7 @@ class DummyWandb:
         pass
 
 
-def download_file_with_lock(url, filename, postprocess_fn=None):
+def download_file_with_lock(url, filename, postprocess_fn=None, use_lock=True, timeout=60):
     base_dir = get_base_dir()
     file_path = os.path.join(base_dir, filename)
     lock_path = file_path + '.lock'
@@ -71,19 +71,40 @@ def download_file_with_lock(url, filename, postprocess_fn=None):
     if os.path.exists(file_path):
         return file_path
     
-    with FileLock(lock_path):
-        if os.path.exists(file_path):
-            return file_path
-        
-        print(f"Downloading from {url}")
+    if not use_lock:
+        log0(f"Downloading from {url} (no lock)")
         with urllib.request.urlopen(url) as response:
             content = response.read()
-        
         with open(file_path, 'wb') as f:
             f.write(content)
-        
         if postprocess_fn is not None:
             postprocess_fn(file_path)
+        return file_path
+    
+    try:
+        with FileLock(lock_path, timeout=timeout):
+            # Double-check after acquiring lock
+            if os.path.exists(file_path):
+                return file_path
+            
+            print(f"Downloading from {url}")
+            with urllib.request.urlopen(url) as response:
+                content = response.read()
+            
+            with open(file_path, 'wb') as f:
+                f.write(content)
+            
+            if postprocess_fn is not None:
+                postprocess_fn(file_path)
+    except TimeoutError:
+        # Lock timeout - another process is downloading
+        log0(f"Lock timeout waiting for {filename}, assuming another process is downloading")
+        # Wait a bit and check if file exists now
+        import time
+        time.sleep(1)
+        if os.path.exists(file_path):
+            return file_path
+        raise RuntimeError(f"Failed to acquire lock for {filename} after {timeout}s")
     
     return file_path
 

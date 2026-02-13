@@ -22,8 +22,7 @@ def place_eval_bundle(file_path):
             zip_ref.extractall(tmpdir)
         extracted_bundle_dir = os.path.join(tmpdir, 'eval_bundle')
         shutil.move(extracted_bundle_dir, eval_bundle_dir)
-    print0(f"Place eval_bundle directory at {eval_bundle_dir}")
-
+    log0(f"Place eval_bundle directory at {eval_bundle_dir}")
 
 
 def evaluate_model(model, tokenizer, device, max_per_task=-1):

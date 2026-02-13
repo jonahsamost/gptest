@@ -2,7 +2,7 @@ import time
 from typing import Any
 from contextlib import nullcontext
 
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 import torch
 import torch.nn.functional as F
 
@@ -18,6 +18,7 @@ from gptest.data.dataloader import (
 from gptest.evals.bpb_loss_eval import evaluate_bpb
 from gptest.evals.base_eval import evaluate_model
 from gptest.training.loss import cross_entropy
+from gptest.utils.checkpoint import Checkpoint, BASE
 
 
 class Trainer:
@@ -38,10 +39,13 @@ class Trainer:
         self.grad_accum_steps = self.config.meta.grad_accum_steps
         self.smooth_train_loss = 0.0
         self.total_training_time = 0.0
+        self.min_val_bpb = 100_000_000
+        self.val_bpb = 100_000_000
         self.total_batch_size = (
             ddp.world_size * config.meta.device_batch_size * config.gpt.seq_len * config.meta.grad_accum_steps
         )
         self.lrm = 0.0
+        self.checkpoint = Checkpoint(BASE, ddp.rank)
 
         self.autocast_ctx = torch.amp.autocast(
             device_type=self.device_type, dtype=DTYPE_MAP[config.meta.train_dtype]
@@ -65,7 +69,7 @@ class Trainer:
         self.uncompiled_model = model
         self.model = torch.compile(model, dynamic=False)
 
-        self.num_iterations = get_step_count(model, config, ddp)
+        self.num_iterations = int(get_step_count(model, config, ddp))
         self.flops_per_token = self.model.estimate_flops()
         self.gpu_peak_flops = get_peak_flops()
 
@@ -101,11 +105,12 @@ class Trainer:
         eval_steps = 20
         log0(f"Eval bpb for {eval_steps} steps")
         with self.autocast_ctx:
-            val_bpb = evaluate_bpb(self.model, val_loader, eval_steps, self.token_bytes)
-        log0(f"Step: {self.iteration:05d} | Validation bpb: {val_bpb:.6f}")
+            self.val_bpb = evaluate_bpb(self.model, val_loader, eval_steps, self.token_bytes)
+        self.min_val_bpb = min(self.min_val_bpb, self.val_bpb)
+        log0(f"Step: {self.iteration:05d} | Validation bpb: {self.val_bpb:.6f}")
         self.wandb_run.log({
             "step": self.iteration,
-            "val/bpb": val_bpb,
+            "val/bpb": self.val_bpb,
         })
         self.model.train()
     
@@ -231,6 +236,30 @@ class Trainer:
                 "train/mfu": mfu,
                 "train/epoch": self.pqd.epoch,
             })
+        
+        do_ckpt = self.iteration and (self.iteration % self.config.meta.checkpoint_every == 0)
+        if is_end or do_ckpt:
+            self.save_checkpoint()
+        
+    def save_checkpoint(self):
+        log0(f'Saving checkpoint at step: {self.iteration}')
+        meta_data = {
+            "step": self.iteration,
+            "val_bpb": self.val_bpb,
+            "model_config": OmegaConf.to_container(self.config, resolve=True),
+            "dataloader_state_dict": self.pqd.to_dict(),
+            "loop_state": {
+                "min_val_bpb": self.min_val_bpb,
+                "smooth_train_loss": self.smooth_train_loss,
+                "total_training_time": self.total_training_time,
+            },
+        }
+        self.checkpoint.save(
+            self.iteration,
+            self.uncompiled_model.state_dict(),
+            [opt.state_dict() for opt in self.optimizers],
+            meta_data
+        )
     
     def finish(self):
         self.wandb_run.finish()

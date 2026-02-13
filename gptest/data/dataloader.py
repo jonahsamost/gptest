@@ -3,13 +3,16 @@ import pyarrow.parquet as pq
 
 from gptest.utils.ddp_utils import get_dist_info
 from gptest.data.dataset import list_parquet_files
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, asdict
 
 @dataclass
 class PQData:
     pq_idx: int = 0
     rg_idx: int = 0
     epoch: int = 0
+
+    def to_dict(self):
+        return asdict(self)
 
 
 def _document_batches(split, resume_state_dict, tokenizer_batch_size):
