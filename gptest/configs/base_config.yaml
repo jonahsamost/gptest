@@ -16,6 +16,7 @@ tokenizer:
 meta:
   # core
   train_dtype: bf16
+  inference_dtype: bf16
   device_batch_size: 16
   resume_from_step: -1
   # optimizer
