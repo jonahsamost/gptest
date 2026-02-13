@@ -104,7 +104,7 @@ class Checkpoint:
     
     def load_model_from_dir(self, device, is_eval=True, step=None):
         if step is None:
-            step = self.find_last_step(self.checkpoint_dir)
+            step = self.find_latest_by_time()
             log0(f"No step provided, using latest step: {step}")
         
         log0(f"Loading model from {self.checkpoint_dir} with step {step}")
