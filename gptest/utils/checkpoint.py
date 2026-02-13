@@ -93,21 +93,21 @@ class Checkpoint:
         assert tsize == tsize_config, f'Tokenizer vocab size ({tsize}) != config vocab size ({tsize_config})'
         return model, tokenizer, meta_data
 
-    def find_latest_by_time(self, checkpoint_dir):
-        checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "model_*.pt"))
+    def find_latest_by_time(self):
+        checkpoint_files = glob.glob(os.path.join(self.checkpoint_dir, "model_*.pt"))
         if not checkpoint_files:
-            raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
+            raise FileNotFoundError(f"No checkpoints found in {self.checkpoint_dir}")
         
         latest_file = max(checkpoint_files, key=os.path.getmtime)
         step = int(os.path.basename(latest_file).split("_")[-1].split(".")[0])
         return step
     
-    def load_model_from_dir(self, checkpoint_dir, device, is_eval=True, step=None):
+    def load_model_from_dir(self, device, is_eval=True, step=None):
         if step is None:
-            step = self.find_last_step(checkpoint_dir)
+            step = self.find_last_step(self.checkpoint_dir)
             log0(f"No step provided, using latest step: {step}")
         
-        log0(f"Loading model from {checkpoint_dir} with step {step}")
+        log0(f"Loading model from {self.checkpoint_dir} with step {step}")
         model, tokenizer, meta_data = self.build_model(step, device, is_eval=is_eval)
         return model, tokenizer, meta_data
     

@@ -9,7 +9,7 @@ class KVCache:
         self.device = device
 
         self.n_layers = config.gpt.layers
-        self.n_heads = config.attn.num_heads
+        self.n_heads = config.attn.num_kv_heads
         self.head_dim = config.attn.hidden_dim // self.n_heads
         self.max_seq_len = seq_len or config.gpt.seq_len
 

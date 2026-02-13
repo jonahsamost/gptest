@@ -57,7 +57,7 @@ class GPT(nn.Module):
 
         # TODO add residual lambdas, x0 lambdas, and value embs (ResFormer)
     
-    def forward(self, inputs, loss_reduction='mean'):
+    def forward(self, inputs, loss_reduction='mean', kv_cache=None):
         B, T = inputs.size()
 
         assert T <= self.cos.size(1), f'Sequence length larger than rotary embedding cache: {T} > {self.cos.size(1)}'
