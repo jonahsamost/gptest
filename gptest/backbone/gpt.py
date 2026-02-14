@@ -56,6 +56,10 @@ class GPT(nn.Module):
         self.resform_1 = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_og_resf else None
         self.resform_2 = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_og_resf else None
 
+        self.use_res_blend = config.meta.use_residual_blend
+        self.res_lambda = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_res_blend else None
+        self.x0_lambda = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_res_blend else None
+
         # not in model.parameters(), not updated by optimizer,
         # dont recieve gradients, not in state_dict() (persistent=False)
         # get moved with .to()
@@ -70,7 +74,7 @@ class GPT(nn.Module):
         if self.use_og_resf:
             kwargs.update({
                 'resformer_lambda_1': self.resform_1,
-                'resformer_lamba_2': self.resform_2
+                'resformer_lambda_2': self.resform_2
             })
 
         assert T <= self.cos.size(1), f'Sequence length larger than rotary embedding cache: {T} > {self.cos.size(1)}'
@@ -81,7 +85,10 @@ class GPT(nn.Module):
 
         x = self.transformer.wte(inputs) # (B, T, H)
         x = rms_norm(x)
+        x0 = x  # for residuals
         for i, block in enumerate(self.transformer.h):
+            if self.use_res_blend:
+                x = self.res_lambda[i] * x + self.x0_lambda[i] * x0
             x = block(x, cos_sin, kv_cache=kv_cache, **kwargs)
         x = rms_norm(x)
 
@@ -161,6 +168,10 @@ class GPT(nn.Module):
         if self.use_og_resf:
             self.resform_2.fill_(0.5)
             self.resform_1.fill_(0.5)
+        
+        if self.use_res_blend:
+            self.res_lambda.fill_(1.0)
+            self.x0_lambda.fill_(0.0)
 
 
     def setup_optimizers(self, config: DictConfig, ddp: DDP):
@@ -198,11 +209,15 @@ class GPT(nn.Module):
         matrix_params   = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params   = list(self.lm_head.parameters())
-        resf1_params = [self.resform_1] if self.resform_1 is not None else []
-        resf2_params = [self.resform_2] if self.resform_2 is not None else []
+        resf1_params = [self.resform_1] if self.use_og_resf else []
+        resf2_params = [self.resform_2] if self.use_og_resf else []
+        resid_params = [self.res_lambda] if self.use_res_blend else []
+        resid_x0_params = [self.x0_lambda] if self.use_res_blend else []
+
         assert len(list(self.parameters())) == (
             len(matrix_params) + len(embedding_params) + len(lm_head_params)
             + len(resf1_params) + len(resf2_params)
+            + len(resid_params) + len(resid_x0_params)
         )
 
         adam_groups = [
@@ -213,6 +228,11 @@ class GPT(nn.Module):
             adam_groups.extend([
                 dict(params=resf1_params, lr=config.gpt.resformer_lr),
                 dict(params=resf2_params, lr=config.gpt.resformer_lr),
+            ])
+        if self.use_res_blend:
+            adam_groups.extend([
+                dict(params=resid_params, lr=config.gpt.resid_lr),
+                dict(params=resid_x0_params, lr=config.gpt.resid_x0_lr),
             ])
         adamw_kwargs = dict(
             betas=adam_betas,
@@ -253,8 +273,10 @@ class GPT(nn.Module):
 
         ignored_params = (
             self.transformer.wte.weight.numel()
-            + (self.resform_1.numel() if self.resform_1 is not None else 0)
-            + (self.resform_2.numel() if self.resform_2 is not None else 0)
+            + (self.resform_1.numel() if self.use_og_resf else 0)
+            + (self.resform_2.numel() if self.use_og_resf else 0)
+            + (self.res_lambda.numel() if self.use_res_blend else 0)
+            + (self.x0_lambda.numel() if self.use_res_blend else 0)
         )
         h = self.config.attn.num_heads
         q = self.config.mlp.hidden_dim // h
