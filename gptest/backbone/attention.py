@@ -79,7 +79,7 @@ class CausalSelfAttention(nn.Module):
                 v0 = kwargs.get('v0', None)
                 resf_l1 = kwargs.get('resformer_lambda_1', None)
                 resf_l2 = kwargs.get('resformer_lambda_2', None)
-                if v0 and resf_l1 and resf_l2 and self.layer_idx > 0:
+                if v0 and resf_l1 is not None and resf_l2 is not None:
                     v = v * resf_l2[self.layer_idx] + v0 * resf_l1[self.layer_idx]
 
         cos, sin = cos_sin

@@ -53,8 +53,8 @@ class GPT(nn.Module):
 
         # ResFormer
         self.use_og_resf = config.meta.use_og_resformer
-        self.resform_1 = nn.Parameter(torch.ones(config.gpt.layers)) if self.og_resf else None
-        self.resform_2 = nn.Parameter(torch.ones(config.gpt.layers)) if self.og_resf else None
+        self.resform_1 = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_og_resf else None
+        self.resform_2 = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_og_resf else None
 
         # not in model.parameters(), not updated by optimizer,
         # dont recieve gradients, not in state_dict() (persistent=False)
@@ -62,7 +62,7 @@ class GPT(nn.Module):
         self.register_buffer('cos', cos, persistent=False)
         self.register_buffer('sin', sin, persistent=False)
 
-        # TODO add residual lambdas, x0 lambdas, and value embs (ResFormer-style)
+        # TODO add residual lambdas, x0 lambdas, and value embs (ResFormer)
     
     def forward(self, inputs, loss_reduction='mean', kv_cache=None):
         B, T = inputs.size()
@@ -70,8 +70,7 @@ class GPT(nn.Module):
         if self.use_og_resf:
             kwargs.update({
                 'resformer_lambda_1': self.resform_1,
-                'resformer_lamba_2': self.resform_2,
-                'v0': None,
+                'resformer_lamba_2': self.resform_2
             })
 
         assert T <= self.cos.size(1), f'Sequence length larger than rotary embedding cache: {T} > {self.cos.size(1)}'
@@ -199,8 +198,8 @@ class GPT(nn.Module):
         matrix_params   = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params   = list(self.lm_head.parameters())
-        resf1_params = [self.resform_1] if self.resform_1 else []
-        resf2_params = [self.resform_2] if self.resform_2 else []
+        resf1_params = [self.resform_1] if self.resform_1 is not None else []
+        resf2_params = [self.resform_2] if self.resform_2 is not None else []
         assert len(list(self.parameters())) == (
             len(matrix_params) + len(embedding_params) + len(lm_head_params)
             + len(resf1_params) + len(resf2_params)
@@ -254,15 +253,14 @@ class GPT(nn.Module):
 
         ignored_params = (
             self.transformer.wte.weight.numel()
-            + self.resform_1.numel() if self.resform_1 else 0
-            + self.resform_2.numel() if self.resform_2 else 0
+            + (self.resform_1.numel() if self.resform_1 is not None else 0)
+            + (self.resform_2.numel() if self.resform_2 is not None else 0)
         )
-        params = nparams - ignored_params
         h = self.config.attn.num_heads
         q = self.config.mlp.hidden_dim // h
         t = self.config.gpt.seq_len
 
-        matmul_flops = 6 * nparams
+        matmul_flops = 6 * (nparams - ignored_params)
         attn_flops = 12 * h * q * t
         total_flops = matmul_flops + attn_flops
         return total_flops
