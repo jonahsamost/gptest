@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from gptest.backbone.common import (
-    apply_rotary_emb, rms_norm
+    apply_rotary_emb, apply_ve, rms_norm
 )
 from gptest.backbone.sdpa import attention_func, attention_with_kv
 
@@ -21,6 +21,8 @@ class CausalSelfAttention(nn.Module):
         self.gate_headwise = config.attn.gate_headwise
         self.gate_elementwise = config.attn.gate_elementwise
         self.use_og_resformer = config.meta.use_og_resformer
+        self.use_value_residual = config.meta.use_value_residual
+        assert not (self.use_og_resformer and self.use_value_residual), 'Do not set use_value_residual and use_og_resformer'
 
         # MQA (num_kv_heads==1), GQA (1 < num_kv_heads < num_heads)
         assert self.hidden_dim % self.num_heads == 0
@@ -44,8 +46,15 @@ class CausalSelfAttention(nn.Module):
         self.k_proj = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False)
+
+        self.ve_gate_channels = 32
+        self.ve_gate = (
+            nn.Linear(self.ve_gate_channels, self.num_kv_heads, bias=False) 
+            if apply_ve(layer_idx, config.gpt.layers) and self.use_value_residual
+            else None
+        )
     
-    def forward(self, x, cos_sin, kv_cache=None, **kwargs):
+    def forward(self, x, cos_sin, kv_cache=None, ve=None, **kwargs):
         B, T, HD = x.size()
 
         # shape: (B, T, H, D)
@@ -70,6 +79,13 @@ class CausalSelfAttention(nn.Module):
 
         k = self.k_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
         v = self.v_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
+
+        if ve is not None:
+            ve = ve.view(B, T, self.num_kv_heads, self.head_dim)
+            # gate's range is (0, 2)
+            # only take first ve_gate_channels features for gating
+            gate = 2 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))
+            v = v + gate.unsqueeze(-1) * ve
 
         # ResFormer: V_n = V_n * lambda_2 + lambda_1 * V_0
         if self.use_og_resformer:

@@ -38,6 +38,13 @@ def check_config(config):
     choices = ['flops', 'params', 'none']
     assert config.meta.chinchilla in choices, f"Step count not in {choices}"
 
+    use_og_res = config.meta.use_og_resformer
+    use_value_res = config.meta.use_value_residual
+    assert not (use_og_res and use_value_res), f'Can only use og resformer OR value residual'
+
+    if config.meta.use_value_residual:
+        assert not config.attn.gate_headwise and not config.attn.gate_elementwise, f'Do not gate V and Q'
+
 
 def log_config(cfg):
     ddp_rank = int(os.environ.get('RANK', 0))

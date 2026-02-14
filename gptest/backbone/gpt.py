@@ -10,7 +10,7 @@ from omegaconf import DictConfig, OmegaConf
 from functools import partial
 from gptest.backbone.ffn import BaseMLP
 from gptest.backbone.attention import CausalSelfAttention
-from gptest.backbone.common import ( rms_norm, precompute_rotary_embeddings)
+from gptest.backbone.common import ( apply_ve, rms_norm, precompute_rotary_embeddings)
 from gptest.utils.ddp_utils import get_dist_info, log0, DDP
 
 
@@ -20,9 +20,9 @@ class TransformerBlock(nn.Module):
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = BaseMLP(config)
     
-    def forward(self, x, cos_sin, kv_cache=None, **kwargs):
+    def forward(self, x, cos_sin, kv_cache=None, ve=None, **kwargs):
         # TODO pre-norm vs post-norm ?
-        x = x + self.attn(rms_norm(x), cos_sin, kv_cache=kv_cache, **kwargs)
+        x = x + self.attn(rms_norm(x), cos_sin, kv_cache=kv_cache, ve=ve, **kwargs)
         x = x + self.mlp(rms_norm(x), **kwargs)
         return x
 
@@ -56,6 +56,14 @@ class GPT(nn.Module):
         self.resform_1 = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_og_resf else None
         self.resform_2 = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_og_resf else None
 
+        # ResFormer (replacement / enhancement)
+        self.use_value_residual = config.meta.use_value_residual
+        kv_dim = config.attn.num_kv_heads * head_dim
+        self.value_embeds = nn.ModuleDict({
+            str(i): nn.Embedding(vocab_size, kv_dim)
+            for i in range(layers) if apply_ve(i, layers)
+        }) if self.use_value_residual else None
+
         self.use_res_blend = config.meta.use_residual_blend
         self.res_lambda = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_res_blend else None
         self.x0_lambda = nn.Parameter(torch.ones(config.gpt.layers)) if self.use_res_blend else None
@@ -66,7 +74,6 @@ class GPT(nn.Module):
         self.register_buffer('cos', cos, persistent=False)
         self.register_buffer('sin', sin, persistent=False)
 
-        # TODO add residual lambdas, x0 lambdas, and value embs (ResFormer)
     
     def forward(self, inputs, loss_reduction='mean', kv_cache=None):
         B, T = inputs.size()
@@ -89,7 +96,9 @@ class GPT(nn.Module):
         for i, block in enumerate(self.transformer.h):
             if self.use_res_blend:
                 x = self.res_lambda[i] * x + self.x0_lambda[i] * x0
-            x = block(x, cos_sin, kv_cache=kv_cache, **kwargs)
+            # ve shape: (B, T, num_kv_heads * head_dim)
+            ve = self.value_embeds[str(i)](inputs) if str(i) in self.value_embeds and self.use_value_residual else None
+            x = block(x, cos_sin, kv_cache=kv_cache, ve=ve, **kwargs)
         x = rms_norm(x)
 
         logits = self.lm_head(x) # shape: (B, T, VS)
@@ -159,6 +168,14 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.mlp.fc.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.proj.weight)
         
+        if self.use_value_residual:
+            for ve in self.value_embeds.values():
+                torch.nn.init.uniform_(ve.weight, -s, s)
+
+        for block in self.transformer.h:
+            if block.attn.ve_gate is not None:
+                torch.nn.init.zeros_(block.attn.ve_gate.weight)
+        
         head_dim = hidden_size // self.config.attn.num_heads
         cos, sin = precompute_rotary_embeddings(
             self.config, self.rotary_seq_len, head_dim
@@ -213,11 +230,13 @@ class GPT(nn.Module):
         resf2_params = [self.resform_2] if self.use_og_resf else []
         resid_params = [self.res_lambda] if self.use_res_blend else []
         resid_x0_params = [self.x0_lambda] if self.use_res_blend else []
+        value_embeds_params = list(self.value_embeds.parameters())
 
         assert len(list(self.parameters())) == (
             len(matrix_params) + len(embedding_params) + len(lm_head_params)
             + len(resf1_params) + len(resf2_params)
             + len(resid_params) + len(resid_x0_params)
+            + len(value_embeds_params)
         )
 
         adam_groups = [
@@ -233,6 +252,10 @@ class GPT(nn.Module):
             adam_groups.extend([
                 dict(params=resid_params, lr=config.gpt.resid_lr),
                 dict(params=resid_x0_params, lr=config.gpt.resid_x0_lr),
+            ])
+        if self.use_value_residual:
+            adam_groups.extend([
+                dict(params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale),
             ])
         adamw_kwargs = dict(
             betas=adam_betas,
@@ -277,6 +300,7 @@ class GPT(nn.Module):
             + (self.resform_2.numel() if self.use_og_resf else 0)
             + (self.res_lambda.numel() if self.use_res_blend else 0)
             + (self.x0_lambda.numel() if self.use_res_blend else 0)
+            + (sum(ve.weight.numel() for ve in self.value_embeds.values()) if self.use_value_residual else 0)
         )
         h = self.config.attn.num_heads
         q = self.config.mlp.hidden_dim // h

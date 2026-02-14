@@ -58,3 +58,7 @@ def get_muon_momentum(it):
     frac = min(it / 300, 1)
     mom = (1 - frac) * 0.85 + frac * .95
     return mom
+
+
+def apply_ve(layer_idx, num_layers):
+    return layer_idx % 2 == (num_layers - 1) % 2

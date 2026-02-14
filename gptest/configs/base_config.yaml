@@ -5,7 +5,7 @@ attn:
   num_heads: 6
   num_kv_heads: 6
   hidden_dim: ${mlp.hidden_dim}
-  gate_headwise: True
+  gate_headwise: False
   gate_elementwise: False
 gpt:
   layers: 12
@@ -50,6 +50,7 @@ meta:
   use_wandb: False
   wandb_log_steps: 100
   # Resformer
-  use_og_resformer: True
+  use_og_resformer: False
+  use_value_residual: True
   # Blend in x0
   use_residual_blend: True
