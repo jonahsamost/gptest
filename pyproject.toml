@@ -7,7 +7,7 @@ name = "gptest"
 version = "0.0.1"
 description = "gpt effects"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "accelerate==1.12.0",
     "bitsandbytes>=0.41.0",
@@ -37,3 +37,5 @@ dependencies = [
     "zstandard>=0.25.0",
 ]
 
+[tool.setuptools]
+packages = ["gptest"]

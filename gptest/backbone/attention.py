@@ -14,8 +14,12 @@ class CausalSelfAttention(nn.Module):
         self.layer_idx = layer_idx
         self.num_heads = config.attn.num_heads
         self.num_kv_heads = config.attn.num_kv_heads
+        self.num_kv_groups = self.num_heads // self.num_kv_heads
         self.hidden_dim = config.attn.hidden_dim
         self.head_dim = self.hidden_dim // self.num_heads
+
+        self.gate_headwise = config.attn.gate_headwise
+        self.gate_elementwise = config.attn.gate_elementwise
 
         # MQA (num_kv_heads==1), GQA (1 < num_kv_heads < num_heads)
         assert self.hidden_dim % self.num_heads == 0
@@ -27,23 +31,50 @@ class CausalSelfAttention(nn.Module):
         # 2. works better with RMSNorm (RMSNorm has no bias term)
         # 3. simplifies kv caching
         # 4. tensor parallelism simplification (no sharding biases across GPUs)
-        self.c_q = nn.Linear(self.hidden_dim, self.num_heads * self.head_dim, bias=False)
-        self.c_k = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
-        self.c_v = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
-        self.c_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False)
+
+        # Gated attention: https://arxiv.org/pdf/2505.06708
+        if self.gate_headwise:
+            self.q_proj = nn.Linear(self.hidden_dim, self.num_heads * self.head_dim + self.num_heads, bias=False)
+        elif self.gate_elementwise:
+            self.q_proj = nn.Linear(self.hidden_dim, self.num_heads * self.head_dim * 2, bias=False)
+        else:
+            self.q_proj = nn.Linear(self.hidden_dim, self.num_heads * self.head_dim, bias=False)
+
+        self.k_proj = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False)
     
     def forward(self, x, cos_sin, kv_cache=None):
         B, T, HD = x.size()
 
         # shape: (B, T, H, D)
-        q = self.c_q(x).view(B, T, self.num_heads, self.head_dim)
-        k = self.c_k(x).view(B, T, self.num_kv_heads, self.head_dim)
-        v = self.c_v(x).view(B, T, self.num_kv_heads, self.head_dim)
+        q = self.q_proj(x)
+        if self.gate_headwise:
+            q = q.view(B, T, self.num_kv_heads, -1)
+            # split into (B, T, kv_heads, head_dim * kv_groups) and (B, T, kv_heads, kv_groups)
+            q, gate_score = torch.split(q, [self.head_dim * self.num_kv_groups, self.num_kv_groups], dim=-1)
+            # shape: (B, T, kv_heads * kv_groups, 1)
+            # i.e. each head in each group gets its own score; all elements in same head get same score
+            gate_score = gate_score.reshape(B, T, -1, 1)
+            # q stays as shape (B, T, num_heads, head_dim)
+            q = q.reshape(B, T, -1, self.head_dim)
+        elif self.gate_elementwise:
+            q = q.view(B, T, self.num_kv_heads, -1)
+            q, gate_score = torch.split(q, [self.head_dim * self.num_kv_groups] * 2, dim=-1)
+            # each element across all heads gets own score
+            gate_score = gate_score.reshape(B, T, -1, self.head_dim)
+            q = q.reshape(B, T, -1, self.head_dim)
+        else:
+            q = q.view(B, T, self.num_heads, self.head_dim)
+
+        k = self.k_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
+        v = self.v_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
 
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = rms_norm(q), rms_norm(k)
         
+        # output shape is (B, T, H, D)
         if kv_cache is None:
             y = attention_func(q, k, v, causal=True)
         else:
@@ -57,6 +88,10 @@ class CausalSelfAttention(nn.Module):
             # only advance cache is last layer
             if self.layer_idx == kv_cache.n_layers - 1:
                 kv_cache.advance(T)
+
+        if self.gate_elementwise or self.gate_headwise:
+            y = y * torch.sigmoid(gate_score)
+
         y = y.contiguous().view(B, T, -1)
-        y = self.c_proj(y)
+        y = self.o_proj(y)
         return y

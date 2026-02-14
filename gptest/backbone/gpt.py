@@ -2,7 +2,8 @@ from pickletools import optimize
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim import AdamW, Muon
+from gptest.optimizers.muon import Muon, DistMuon
+from gptest.optimizers.adamw import DistAdamW
 import math
 from omegaconf import DictConfig, OmegaConf
 
@@ -193,14 +194,17 @@ class GPT(nn.Module):
             weight_decay=0.0,
             fused=True,
         )
-        adamw_optimizer = AdamW(adam_groups, **adamw_kwargs)
+        adam = DistAdamW if ddp.is_ddp else partial(torch.optim.AdamW, fused=True)
+        adamw_optimizer = adam(adam_groups, **adamw_kwargs)
+
+        muon = DistMuon if ddp.is_ddp else Muon
 
         muon_kwargs = dict(
             lr=matrix_lr,
             momentum=0.95,
             weight_decay=weight_decay_scaled,
         )
-        muon_optimizer = Muon(matrix_params, **muon_kwargs)
+        muon_optimizer = muon(matrix_params, **muon_kwargs)
 
         optimizers = [adamw_optimizer, muon_optimizer]
         for opt in optimizers:

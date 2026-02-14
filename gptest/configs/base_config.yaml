@@ -5,6 +5,8 @@ attn:
   num_heads: 6
   num_kv_heads: 6
   hidden_dim: ${mlp.hidden_dim}
+  gate_headwise: True
+  gate_elementwise: False
 gpt:
   layers: 12
   rope_dtype: bf16
