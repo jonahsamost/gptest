@@ -20,10 +20,10 @@ class TransformerBlock(nn.Module):
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = BaseMLP(config)
     
-    def forward(self, x, cos_sin, kv_cache=None):
+    def forward(self, x, cos_sin, kv_cache=None, **kwargs):
         # TODO pre-norm vs post-norm ?
-        x = x + self.attn(rms_norm(x), cos_sin, kv_cache=kv_cache)
-        x = x + self.mlp(rms_norm(x))
+        x = x + self.attn(rms_norm(x), cos_sin, kv_cache=kv_cache, **kwargs)
+        x = x + self.mlp(rms_norm(x), **kwargs)
         return x
 
 
@@ -50,16 +50,29 @@ class GPT(nn.Module):
         cos, sin = precompute_rotary_embeddings(
             config, self.rotary_seq_len, head_dim
         )
+
+        # ResFormer
+        self.use_og_resf = config.meta.use_og_resformer
+        self.resform_1 = nn.Parameter(torch.ones(config.gpt.layers)) if self.og_resf else None
+        self.resform_2 = nn.Parameter(torch.ones(config.gpt.layers)) if self.og_resf else None
+
         # not in model.parameters(), not updated by optimizer,
         # dont recieve gradients, not in state_dict() (persistent=False)
         # get moved with .to()
         self.register_buffer('cos', cos, persistent=False)
         self.register_buffer('sin', sin, persistent=False)
 
-        # TODO add residual lambdas, x0 lambdas, and value embs (ResFormer)
+        # TODO add residual lambdas, x0 lambdas, and value embs (ResFormer-style)
     
     def forward(self, inputs, loss_reduction='mean', kv_cache=None):
         B, T = inputs.size()
+        kwargs = {}
+        if self.use_og_resf:
+            kwargs.update({
+                'resformer_lambda_1': self.resform_1,
+                'resformer_lamba_2': self.resform_2,
+                'v0': None,
+            })
 
         assert T <= self.cos.size(1), f'Sequence length larger than rotary embedding cache: {T} > {self.cos.size(1)}'
         assert inputs.device == self.cos.device, f'Rotary embeddings and inputs are on different devices: {inputs.device} != {self.cos.device}'
@@ -68,8 +81,9 @@ class GPT(nn.Module):
         cos_sin = self.cos[:, :T], self.sin[:, :T]
 
         x = self.transformer.wte(inputs) # (B, T, H)
+        x = rms_norm(x)
         for i, block in enumerate(self.transformer.h):
-            x = block(x, cos_sin, kv_cache=kv_cache)
+            x = block(x, cos_sin, kv_cache=kv_cache, **kwargs)
         x = rms_norm(x)
 
         logits = self.lm_head(x) # shape: (B, T, VS)
@@ -145,6 +159,11 @@ class GPT(nn.Module):
         )
         self.cos, self.sin = cos, sin
 
+        if self.use_og_resf:
+            self.resform_2.fill_(0.5)
+            self.resform_1.fill_(0.5)
+
+
     def setup_optimizers(self, config: DictConfig, ddp: DDP):
         tokens_per_fwdbwd = config.meta.device_batch_size * config.gpt.seq_len
         world_tokens_per_fwdbwd = tokens_per_fwdbwd * ddp.world_size
@@ -180,14 +199,22 @@ class GPT(nn.Module):
         matrix_params   = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params   = list(self.lm_head.parameters())
+        resf1_params = [self.resform_1] if self.resform_1 else []
+        resf2_params = [self.resform_2] if self.resform_2 else []
         assert len(list(self.parameters())) == (
             len(matrix_params) + len(embedding_params) + len(lm_head_params)
+            + len(resf1_params) + len(resf2_params)
         )
 
         adam_groups = [
             dict(params=lm_head_params,   lr=unembedding_lr * dmodel_lr_scale),
             dict(params=embedding_params, lr=embedding_lr   * dmodel_lr_scale),
         ]
+        if self.use_og_resf:
+            adam_groups.extend([
+                dict(params=resf1_params, lr=config.gpt.resformer_lr),
+                dict(params=resf2_params, lr=config.gpt.resformer_lr),
+            ])
         adamw_kwargs = dict(
             betas=adam_betas,
             eps=1e-10,
@@ -224,8 +251,11 @@ class GPT(nn.Module):
         Attn => 12 * h * q * effective_seq_len
         """
         nparams = self.params_count()
+
         ignored_params = (
             self.transformer.wte.weight.numel()
+            + self.resform_1.numel() if self.resform_1 else 0
+            + self.resform_2.numel() if self.resform_2 else 0
         )
         params = nparams - ignored_params
         h = self.config.attn.num_heads

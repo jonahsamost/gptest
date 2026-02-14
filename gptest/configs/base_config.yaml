@@ -13,6 +13,7 @@ gpt:
   seq_len: 1024
   unembedding_lr: .004
   embedding_lr: .3
+  resformer_lr: .005
 tokenizer:
   vocab_size: 32768
 meta:
@@ -46,3 +47,5 @@ meta:
   # logging
   use_wandb: False
   wandb_log_steps: 100
+  # Resformer
+  use_og_resformer: True

@@ -11,7 +11,7 @@ class BaseMLP(nn.Module):
         self.fc = nn.Linear(hd, hd * psize, bias=False)
         self.proj = nn.Linear(hd * psize, hd, bias=False)
     
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = self.fc(x)
         x = F.relu(x).square()
         x = self.proj(x)

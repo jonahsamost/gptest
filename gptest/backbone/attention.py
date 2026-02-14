@@ -20,6 +20,7 @@ class CausalSelfAttention(nn.Module):
 
         self.gate_headwise = config.attn.gate_headwise
         self.gate_elementwise = config.attn.gate_elementwise
+        self.use_og_resformer = config.meta.use_og_resformer
 
         # MQA (num_kv_heads==1), GQA (1 < num_kv_heads < num_heads)
         assert self.hidden_dim % self.num_heads == 0
@@ -44,7 +45,7 @@ class CausalSelfAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_dim, self.num_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False)
     
-    def forward(self, x, cos_sin, kv_cache=None):
+    def forward(self, x, cos_sin, kv_cache=None, **kwargs):
         B, T, HD = x.size()
 
         # shape: (B, T, H, D)
@@ -69,6 +70,17 @@ class CausalSelfAttention(nn.Module):
 
         k = self.k_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
         v = self.v_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
+
+        # ResFormer: V_n = V_n * lambda_2 + lambda_1 * V_0
+        if self.use_og_resformer:
+            if self.layer_idx == 0:
+                kwargs['v0'] = v
+            else:
+                v0 = kwargs.get('v0', None)
+                resf_l1 = kwargs.get('resformer_lambda_1', None)
+                resf_l2 = kwargs.get('resformer_lambda_2', None)
+                if v0 and resf_l1 and resf_l2 and self.layer_idx > 0:
+                    v = v * resf_l2[self.layer_idx] + v0 * resf_l1[self.layer_idx]
 
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
