@@ -41,7 +41,6 @@ if __name__ == '__main__':
         download_file_with_lock(EVAL_BUNDLE_URL, "eval_bundle.zip", postprocess_fn=place_eval_bundle, use_lock=False)
     synchronize()
 
-    wandb_run = DummyWandb()
     trainer = Trainer(config, ddp=ddp, device=device, wandb_run=wandb_run)
     trainer.train()
     trainer.finish()

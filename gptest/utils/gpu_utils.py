@@ -16,7 +16,7 @@ def compute_init(device_type='cuda'): # cuda | cpu | mps
         torch.cuda.manual_seed(42)
     
     if device_type == 'cuda':
-        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        torch.backends.cuda.matmul.allow_tf32 = True
     
     ddp = get_dist_info()
     if ddp.is_ddp and device_type == 'cuda':

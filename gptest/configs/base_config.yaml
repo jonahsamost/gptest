@@ -33,13 +33,13 @@ meta:
   warmdown_ratio: 0.4
   final_lr_frac: 0.0
   # eval
-  sample_every: 10
-  eval_every: 10
-  core_metric_every: 10
-  core_metric_max_per_task: 10
-  checkpoint_every: 10
+  sample_every: 1000
+  eval_every: 1000
+  core_metric_every: 1000
+  core_metric_max_per_task: 1000
+  checkpoint_every: 1000
   # step count determination
-  max_steps: 1000
+  max_steps: -1
   data_param_ratio: 21.0  # empirical from chinchilla
   target_flops: -1
   chinchilla: params # enum one of ("params", "flops", "none")

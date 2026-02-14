@@ -132,10 +132,10 @@ class GPT(nn.Module):
         hidden_size = self.config.mlp.hidden_dim
         s = 3**0.5 * hidden_size**-.5
         for block in self.transformer.h:
-            torch.nn.init.uniform_(block.attn.c_q.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
-            torch.nn.init.zeros_(block.attn.c_proj.weight)
+            torch.nn.init.uniform_(block.attn.q_proj.weight, -s, s)
+            torch.nn.init.uniform_(block.attn.k_proj.weight, -s, s)
+            torch.nn.init.uniform_(block.attn.v_proj.weight, -s, s)
+            torch.nn.init.zeros_(block.attn.o_proj.weight)
             torch.nn.init.uniform_(block.mlp.fc.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.proj.weight)
         
